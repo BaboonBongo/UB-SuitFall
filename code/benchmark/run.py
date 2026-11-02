@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""Fall detection benchmark: Random Forest vs SVM vs LSTM.
-
-    python run.py extract       silhouette features per frame (+ QA images)
-    python run.py inspect       dataset report
-    python run.py experiment    tuning, final models, test predictions
-    python run.py evaluate      metrics, CIs, paired tests, robustness
-    python run.py benchmark     latency, throughput, memory, size
-    python run.py report        figures, paper tables, reports
-    python run.py ablations     ablation runs (after the main run)
-    python run.py all           extract -> ... -> report
-
-    --config  config file (default config.yaml = original pipeline;
-              config_foldmask.yaml = corrected, training-participant-only masks)
-    --quick   tiny search / 1 seed into <output_dir>/../quick, to test the setup (not for the paper)
-    --force   redo silhouette extraction
-    --accept-camera-shift   (corrected pipeline only) allow mask transfer although
-              camera_check.json reports a scene shift; only after checking the overlays
-"""
+"""Run the fall-detection benchmark pipeline."""
 import argparse
 import time
 from pathlib import Path

@@ -1,8 +1,4 @@
-"""Dataset index: one row per recording (subject x trial x camera).
-
-Reads the cleaned fall_labels.csv, the per-frame labels from
-`fall_labels.py export` and the frame folders. Never writes to the dataset.
-"""
+"""Dataset index and per-recording loaders."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,7 +7,7 @@ import pandas as pd
 
 
 def camera_label(folder: str) -> str:
-    """cctv-a / Cam_A -> CCTV-A (same rule as fall_labels.py)."""
+    """Map camera folder names to the dataset camera labels."""
     n = folder.lower().replace("_", "").replace("-", "")
     return {"a": "CCTV-A", "b": "CCTV-B"}.get(n[-1:], folder.upper())
 
@@ -28,8 +24,7 @@ def build_index(cfg: dict) -> pd.DataFrame:
     rows = []
     for subject, root in cfg["subjects"].items():
         root = Path(root)
-        cams = {camera_label(d.name): d for d in (root / "Frames").iterdir() if d.is_dir()} \
-            if (root / "Frames").is_dir() else {}
+        cams = {camera_label(d.name): d for d in (root / "Frames").iterdir() if d.is_dir()} if (root / "Frames").is_dir() else {}
         labels = pd.read_csv(root / "fall_labels.csv")
         for r in labels.itertuples(index=False):
             rid = f"{r.trial_uid}_{r.camera}"
@@ -48,7 +43,7 @@ def build_index(cfg: dict) -> pd.DataFrame:
 
 
 def load_recording(cfg: dict, rec) -> pd.DataFrame:
-    """Per-frame labels joined with the per-frame silhouette features."""
+    """Merge per-frame labels with silhouette features for one recording."""
     labels = pd.read_csv(rec.label_file)
     feats = Path(cfg["features_dir"]) / rec.subject_id / f"{rec.recording_id}.csv"
     if not feats.exists():

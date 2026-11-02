@@ -1,33 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the public UB-SuitFall release from the two working folders.
-
-The two subjects live in different places and use different names
-(S01: cctv-a / cctv-b, videos ActivityXTrialY.mp4; S02: Cam_A / Cam_B,
-videos X_Y.mp4). This script copies only what belongs in the release into
-one clean, anonymous tree:
-
-    <out>/S01/CCTV-A/Activity1Trial1.mp4 ...        original videos (renamed)
-    <out>/S01/Frames/CCTV-A/Activity1Trial1/00001.jpg ...  10 fps frames
-    <out>/S01/fall_labels.csv
-    <out>/S01/frame_labels/S01_A01_T1_CCTV-A.csv ...
-    <out>/S02/...                                     same structure
-    <out>/MANIFEST.csv                                one row per recording
-
-Left out on purpose: previews/, previews_v2/, *_pose.jpg and other extra
-files in the frame folders, fall_review/, fall_bench/ (code goes to GitHub),
-reference/, __pycache__/, tree.txt, file_counts.txt, and recordings with
-n_frames = 0 in fall_labels.csv (missing or corrupted).
-
-The source folders are only read, never changed.
-
-Usage:
-    python build_release.py --s01 /path/to/S01_working_folder \
-                            --s02 /path/to/S02_working_folder \
-                            --out /path/to/UB-SuitFall --check
-    # --check only verifies and prints the report; run again without it to copy.
-    # --link makes hard links instead of copies (no extra disk space; only
-    #   works when source and output are on the same filesystem).
-"""
+"""Assemble the public UB-SuitFall release from the two working folders."""
 import argparse
 import csv
 import os
@@ -36,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-CAMERA_DIRS = {  # released name -> folder names used in the working copies
+CAMERA_DIRS = {
     "CCTV-A": ["CCTV-A", "cctv-a", "Cam_A", "cam_a"],
     "CCTV-B": ["CCTV-B", "cctv-b", "Cam_B", "cam_b"],
 }
@@ -54,15 +26,14 @@ _LOGS = {}
 
 
 def renamed_to(vid_dir: Path, original: str):
-    """New name of `original` according to vid_dir/rename_log.csv, or None if no log/entry."""
+    """Return the renamed video name recorded in rename_log.csv, if any."""
     if vid_dir not in _LOGS:
         mapping = {}
         log = vid_dir / "rename_log.csv"
         if log.is_file():
             with open(log, newline="") as f:
                 for row in csv.reader(f):
-                    names = [Path(v.strip()).name for v in row if v.strip().lower().endswith(
-                        (".mp4", ".avi", ".mkv", ".mov"))]
+                    names = [Path(v.strip()).name for v in row if v.strip().lower().endswith((".mp4", ".avi", ".mkv", ".mov"))]
                     if len(names) >= 2:
                         mapping[names[0]] = names[-1]
         _LOGS[vid_dir] = mapping
@@ -70,7 +41,7 @@ def renamed_to(vid_dir: Path, original: str):
 
 
 def plan_subject(subject: str, root: Path):
-    """Return (jobs, problems, skipped) for one subject without touching anything."""
+    """Return the release jobs, problems, and skipped records for one subject."""
     jobs, problems, skipped = [], [], []
     labels = root / "fall_labels.csv"
     if not labels.is_file():
@@ -100,7 +71,6 @@ def plan_subject(subject: str, root: Path):
             problems.append(f"{uid} {cam}: camera folder not found")
             continue
 
-        # video: original name, or already renamed to ActivityXTrialY.* (checked against rename_log.csv)
         src_vid = vid_dir / r["original_filename"]
         if not src_vid.is_file():
             renamed = sorted(vid_dir.glob(trial + ".*"))
@@ -108,8 +78,7 @@ def plan_subject(subject: str, root: Path):
             if len(renamed) == 1:
                 logged = renamed_to(vid_dir, r["original_filename"])
                 if logged is not None and logged != renamed[0].name:
-                    problems.append(f"{uid} {cam}: rename_log.csv says {r['original_filename']} -> "
-                                    f"{logged}, but expected {renamed[0].name}")
+                    problems.append(f"{uid} {cam}: rename_log.csv says {r['original_filename']} -> {logged}, but expected {renamed[0].name}")
                 src_vid = renamed[0]
         if src_vid.is_file():
             dst_vid = Path(subject) / cam / (trial + src_vid.suffix.lower())
@@ -118,10 +87,8 @@ def plan_subject(subject: str, root: Path):
             problems.append(f"{uid} {cam}: video {src_vid} not found")
             src_vid = None
 
-        # frames: only 00001.jpg-style files, must be exactly 1..n
         src_frames = frm_dir / trial
-        frames = sorted(p.name for p in src_frames.iterdir() if FRAME_RE.match(p.name)) \
-            if src_frames.is_dir() else []
+        frames = sorted(p.name for p in src_frames.iterdir() if FRAME_RE.match(p.name)) if src_frames.is_dir() else []
         expected = [f"{i:05d}.jpg" for i in range(1, n + 1)]
         if frames != expected:
             have = len(frames)
@@ -133,7 +100,6 @@ def plan_subject(subject: str, root: Path):
         for name in frames:
             jobs.append(("file", src_frames / name, Path(subject) / "Frames" / cam / trial / name))
 
-        # per-frame labels
         fl = root / "frame_labels" / f"{uid}_{cam}.csv"
         if fl.is_file():
             jobs.append(("file", fl, Path(subject) / "frame_labels" / fl.name))
@@ -171,7 +137,9 @@ def main():
     jobs, problems, skipped = [], [], []
     for subject, root in (("S01", args.s01), ("S02", args.s02)):
         j, p, s = plan_subject(subject, root.resolve())
-        jobs += j; problems += p; skipped += s
+        jobs += j
+        problems += p
+        skipped += s
 
     files = [j for j in jobs if j[0] == "file"]
     manifest = [j[2] for j in jobs if j[0] == "manifest"]
@@ -200,14 +168,15 @@ def main():
                 os.link(src, dst)
                 continue
             except OSError:
-                pass  # different filesystem: fall back to copying
+                pass
         shutil.copy2(src, dst)
         if i % 5000 == 0:
             print(f"  {i:,}/{len(files):,} files")
 
     with open(out / "MANIFEST.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(manifest[0]))
-        w.writeheader(); w.writerows(manifest)
+        w.writeheader()
+        w.writerows(manifest)
     print(f"\nDone: {out}")
 
 

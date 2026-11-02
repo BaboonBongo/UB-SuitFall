@@ -1,24 +1,4 @@
-"""Where the static green-background mask comes from.
-
-Two modes (config key `mask_source`):
-
-participant (original, transductive)
-    One mask per participant and camera, estimated from all of that
-    participant's recordings. Features live in <features_dir>/<subject>/.
-    When a participant is the test subject, its own unlabelled frames
-    contributed to the mask used on it.
-
-training (corrected, inductive)
-    For each leave-one-subject-out fold, one mask per camera estimated only
-    from the TRAINING participant(s) of that fold, and applied to the
-    recordings of both the training and the test participant. Each fold has
-    its own feature folder, <features_dir>/mask_from_<train subjects>/, so a
-    mask or feature file is never reused across folds.
-
-The masking algorithm itself (4 evenly spaced frames per recording, suit-green
-in >= 50% of sampled frames, 11x11 dilation, mask skipped when the frame size
-differs) is identical in both modes; only the source recordings change.
-"""
+"""Mask source selection for participant- vs training-derived silhouettes."""
 from __future__ import annotations
 
 import copy
@@ -41,11 +21,7 @@ def source_tag(subjects: list[str]) -> str:
 
 
 def fold_cfg(cfg: dict, test_subject: str) -> dict:
-    """Config whose features_dir holds the features to use in the fold that tests `test_subject`.
-
-    In participant mode this is the original shared feature folder; in training
-    mode it is the fold's own folder, built from training-participant masks only.
-    """
+    """Return the config for the fold that tests `test_subject`."""
     if mode(cfg) == "participant":
         return cfg
     c = copy.copy(cfg)
@@ -57,10 +33,7 @@ def fold_cfg(cfg: dict, test_subject: str) -> dict:
 
 
 def mask_png(cfg: dict, subject: str, camera: str) -> Path:
-    """Path of the static mask applied to `subject`'s recordings of `camera` under `cfg`.
-
-    `cfg` must be the fold config (fold_cfg) in training mode.
-    """
+    """Path to the static mask used for this subject and camera."""
     root = Path(cfg["features_dir"]) / "static"
     if mode(cfg) == "participant":
         return root / f"{subject}_{camera}.png"

@@ -1,7 +1,4 @@
-"""Dataset inspection report (Stage 1) and the final figures, tables and
-reports (Stage 7). Every number is read from files written by earlier
-stages; interpretation is left to the authors.
-"""
+"""Generate dataset inspection and result summaries."""
 from __future__ import annotations
 
 import json
@@ -9,31 +6,28 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
-import yaml  # noqa: E402
-from sklearn.metrics import precision_recall_curve, roc_curve  # noqa: E402
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import yaml
+from sklearn.metrics import precision_recall_curve, roc_curve
 
 from . import masking
-from .config import md_table, out  # noqa: E402
-from .data import build_index, list_frames  # noqa: E402
+from .config import md_table, out
+from .data import build_index, list_frames
 
 MODELS = ["RF", "SVM", "LSTM"]
 COLORS = {"RF": "#2a6f97", "SVM": "#c8553d", "LSTM": "#588157"}
 
 
-# ---------------------------------------------------------------- Stage 1
 def inspect(cfg: dict) -> None:
     fps, W, S = cfg["fps"], cfg["windows"]["length"], cfg["windows"]["stride"]
     index = build_index(cfg)
     ok = index[index.usable]
     lines = ["# Dataset inspection", "", "## Recordings", "",
-             md_table(index.groupby(["subject_id", "camera", "category"])["usable"].agg(["size", "sum"])
-                      .rename(columns={"size": "expected", "sum": "usable"})), ""]
+             md_table(index.groupby(["subject_id", "camera", "category"])["usable"].agg(["size", "sum"]).rename(columns={"size": "expected", "sum": "usable"})), ""]
     lines += [f"- excluded: {r.recording_id} ({r.activity_name}): {r.issue}" for r in index[~index.usable].itertuples()]
-    coverage = ok.pivot_table(index="activity_name", columns="subject_id", values="recording_id",
-                              aggfunc="count", fill_value=0)
+    coverage = ok.pivot_table(index="activity_name", columns="subject_id", values="recording_id", aggfunc="count", fill_value=0)
     lines += ["", "## Usable recordings per activity", "", md_table(coverage, "{:.0f}"), ""]
     issues = [f"'{a}' has no usable recording for {s}: a model trained on {s} never sees it."
               for a, row in coverage.iterrows() for s, v in row.items() if v == 0]
@@ -43,8 +37,7 @@ def inspect(cfg: dict) -> None:
         y = pd.read_csv(r.label_file)["label"].to_numpy()
         n_files = len(list_frames(r.frames_dir))
         if not n_files == len(y) == r.n_frames:
-            issues.append(f"{r.recording_id}: {r.n_frames} frames in fall_labels.csv, {n_files} images, "
-                          f"{len(y)} label rows")
+            issues.append(f"{r.recording_id}: {r.n_frames} frames in fall_labels.csv, {n_files} images, {len(y)} label rows")
         frames, falls = frames + len(y), falls + y.sum()
         frac = y[np.arange(0, len(y) - W + 1, S)[:, None] + np.arange(W)].mean(1) if len(y) >= W else []
         n_win, n_pos = n_win + len(frac), n_pos + int((np.asarray(frac) >= cfg["windows"]["min_fall_fraction"]).sum())
@@ -52,18 +45,16 @@ def inspect(cfg: dict) -> None:
             fcfg = masking.fold_cfg(cfg, test_subject) if test_subject else cfg
             f = Path(fcfg["features_dir"]) / r.subject_id / f"{r.recording_id}.csv"
             if f.exists():
-                present.append(dict(mask=("from " + masking.source_tag(fcfg["mask_from"])) if test_subject
-                                    else "own subject", subject_id=r.subject_id, camera=r.camera,
+                present.append(dict(mask=("from " + masking.source_tag(fcfg["mask_from"])) if test_subject else "own subject",
+                                    subject_id=r.subject_id, camera=r.camera,
                                     recording_id=r.recording_id, present=pd.read_csv(f)["present"].mean()))
     fall = ok[ok.category == "FALL"]
     timing = pd.DataFrame({"start to impact (s)": (fall.impact - fall.fall_start) / fps,
                            "impact to end (s)": (fall.fall_end - fall.impact) / fps,
                            "whole fall (s)": (fall.fall_end - fall.fall_start + 1) / fps}).describe().T
     lines += ["## Frames, labels and windows", "",
-              f"- {len(ok)} usable recordings, {frames} frames ({frames / fps / 60:.1f} min), "
-              f"FALL frames {100 * falls / frames:.1f}%",
-              f"- windows of {W} frames ({W / fps:g} s), stride {S} ({S / fps:g} s): {n_win} windows, "
-              f"{n_pos} FALL ({100 * n_pos / max(n_win, 1):.1f}%) - accuracy alone would be dominated by NON_FALL",
+              f"- {len(ok)} usable recordings, {frames} frames ({frames / fps / 60:.1f} min), FALL frames {100 * falls / frames:.1f}%",
+              f"- windows of {W} frames ({W / fps:g} s), stride {S} ({S / fps:g} s): {n_win} windows, {n_pos} FALL ({100 * n_pos / max(n_win, 1):.1f}%) - accuracy alone would be dominated by NON_FALL",
               "", "Fall timing from the manual labels:", "",
               md_table(timing[["mean", "std", "min", "50%", "max"]], "{:.2f}"), ""]
     if present:
@@ -80,7 +71,6 @@ def inspect(cfg: dict) -> None:
     print("\n".join(lines))
 
 
-# ---------------------------------------------------------------- Stage 7
 def _save(fig, cfg, name):
     path = out(cfg, "figures", name)
     fig.tight_layout()
@@ -104,7 +94,6 @@ def figures(cfg: dict) -> None:
     fig.suptitle("Window-level confusion matrices, both test subjects", fontsize=10)
     _save(fig, cfg, "confusion_matrices.png")
 
-    # ROC / PR per fold: different fold models' scores are not on one scale
     folds = sorted(p0.fold.unique())
     for kind in ("roc", "pr"):
         fig, axes = plt.subplots(1, len(folds), figsize=(4.6 * len(folds), 4.2), squeeze=False)
@@ -182,7 +171,6 @@ def tables(cfg: dict) -> None:
 
 def reports(cfg: dict) -> None:
     res = lambda n: out(cfg, "results", n)  # noqa: E731
-    # reproducibility
     lines = ["# Reproducibility", ""]
     if res("benchmark_info.json").exists():
         lines += ["```json", res("benchmark_info.json").read_text(), "```", ""]
@@ -196,7 +184,6 @@ def reports(cfg: dict) -> None:
               yaml.safe_dump({k: v for k, v in cfg.items() if k not in ("overrides",)}, sort_keys=False), "```"]
     out(cfg, "reports", "reproducibility.md").write_text("\n".join(lines))
 
-    # factual results summary
     s = pd.read_csv(res("summary.csv"), index_col=0).reindex(MODELS)
     lines = ["# Results summary (generated from the result files)", ""]
     for k in ["f1", "pr_auc", "balanced_accuracy", "recall", "specificity", "false_alarms_per_hour"]:

@@ -1,12 +1,4 @@
-"""Sliding windows and the two input representations.
-
-From the same per-frame signals over the same windows:
-  * RF / SVM: one summary vector per window;
-  * LSTM:     the ordered per-frame signals (T x F).
-Everything is causal: missing silhouettes are forward-filled from earlier
-frames only; frames before the first detection stay NaN and are filled by
-preprocessing learned on training data (see models.py).
-"""
+"""Window features for the fall-detection models."""
 from __future__ import annotations
 
 import warnings
@@ -25,7 +17,7 @@ ACCEL = ["cy", "top", "angle"]
 
 def frame_signals(df: pd.DataFrame, fps: float, blank_rate: float = 0.0, rng=None) -> pd.DataFrame:
     df = df.copy()
-    if blank_rate:                                     # robustness test: drop silhouettes at random
+    if blank_rate:
         df.loc[(rng or np.random.default_rng(0)).random(len(df)) < blank_rate, "present"] = 0.0
     df.loc[df["present"] < 0.5, FEATURES] = np.nan
     df["log_aspect"] = np.log(df["aspect"].clip(lower=1e-3))
@@ -39,7 +31,7 @@ def frame_signals(df: pd.DataFrame, fps: float, blank_rate: float = 0.0, rng=Non
 
 
 def summarise(seq: np.ndarray, names: list[str], feature_set: str) -> tuple[np.ndarray, list[str]]:
-    """N x T x F windows -> N x D summary features."""
+    """Convert windowed sequences into summary features."""
     col = {n: seq[:, :, i] for i, n in enumerate(names)}
     stats = {"mean": np.nanmean, "min": np.nanmin, "max": np.nanmax}
     feats = {f"{c}_{k}": fn(col[c], axis=1) for c in SHAPE for k, fn in stats.items()}
@@ -55,7 +47,7 @@ def summarise(seq: np.ndarray, names: list[str], feature_set: str) -> tuple[np.n
         for c in ACCEL:
             feats[f"a_{c}_absmax"] = np.nanmax(np.abs(col[f"a_{c}"]), 1)
         h = np.nanmax(col["height"], 1)
-        h = np.where(h > 0, h, np.nan)                 # drops relative to body height (camera-independent)
+        h = np.where(h > 0, h, np.nan)
         feats["top_drop_rel"] = (col["top"][:, -1] - col["top"][:, 0]) / h
         feats["cy_drop_rel"] = (col["cy"][:, -1] - col["cy"][:, 0]) / h
         feats["height_last_rel"] = col["height"][:, -1] / h
@@ -66,7 +58,7 @@ def summarise(seq: np.ndarray, names: list[str], feature_set: str) -> tuple[np.n
 
 def build_windows(cfg: dict, subjects: list[str], index: pd.DataFrame | None = None,
                   blank_rate: float = 0.0) -> dict:
-    """All windows of the given subjects: meta (one row per window), X_sum, X_seq."""
+    """Build all windows for the given subjects."""
     w = cfg["windows"]
     W, S, fset = w["length"], w["stride"], w["features"]
     index = build_index(cfg) if index is None else index
@@ -89,7 +81,7 @@ def build_windows(cfg: dict, subjects: list[str], index: pd.DataFrame | None = N
     names = list(sig.columns)
     seq = np.concatenate(seqs)
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN windows before the first detection
+        warnings.simplefilter("ignore", RuntimeWarning)
         X_sum, sum_names = summarise(seq, names, fset)
     keep = [i for i, n in enumerate(names) if fset == "shape_motion" or n in SHAPE or n == "present"]
     return dict(meta=pd.concat(metas, ignore_index=True), X_sum=X_sum, sum_names=sum_names,

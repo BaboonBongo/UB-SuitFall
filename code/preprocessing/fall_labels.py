@@ -1,51 +1,5 @@
 #!/usr/bin/env python3
-# ==============================================================
-# fall_labels.py
-# ==============================================================
-#
-# Builds the fall / non-fall metadata layer described in the
-# Fall/Non-Fall Labeling Plan, WITHOUT touching any video, frame,
-# CVAT XML or COCO file.
-#
-# Two steps:
-#
-#   1. suggest  - one fall_labels.csv per subject: every expected trial
-#                 x camera, its category (Activity 1-5 FALL, 6-10
-#                 NON_FALL), status (ok / no_frames / missing), original
-#                 video filename, and - for FALL trials - SUGGESTED
-#                 fall_start / impact / fall_end frames computed from the
-#                 existing hip/shoulder keypoints. Also writes one review
-#                 image per fall trial (fall_review/) showing the frames
-#                 around the suggestion and the motion curve.
-#                 You then fill in / correct fall_start_frame,
-#                 impact_frame, fall_end_frame and set confirmed = yes.
-#                 Re-running suggest never overwrites those columns.
-#
-#   2. export   - from the finished CSV, writes per-frame labels for
-#                 every trial and camera: the state (PRE_FALL / FALL /
-#                 POST_FALL / NON_FALL), a binary label (FALL = 1, else 0)
-#                 and a 3-class label (normal = 0, FALL = 1, POST_FALL = 2),
-#                 after checking every fall row is consistent.
-#                 Works on the full CSV written by suggest (rows need
-#                 confirmed = yes) and on a cleaned CSV that only keeps the
-#                 final fall_start_frame / impact_frame / fall_end_frame
-#                 columns (no confirmed / status columns: every filled-in
-#                 row counts as final, rows with n_frames = 0 are skipped).
-#
-# Usage:
-#   python fall_labels.py suggest --subject S01 /path/to/S01
-#   python fall_labels.py suggest --subject S02 /path/to/S02
-#   python fall_labels.py export /path/to/S01
-#   python fall_labels.py export /path/to/S01 --use-suggestions   (quick experiments only)
-#
-# Expected folder layout (both participants' working folders follow it):
-#   <subject root>/<camera>/ActivityXTrialY.mp4         (videos; optional rename_log.csv)
-#   <subject root>/Frames/<camera>/ActivityXTrialY/00001.jpg ...  + annotations XML
-#
-# Frame numbers in the CSV are 1-BASED and match the frame filenames
-# (frame 1 = 00001.jpg).
-# ==============================================================
-
+"""Generate fall labels and per-frame labels for the UB-SuitFall dataset."""
 import csv
 import math
 import re
@@ -57,11 +11,9 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-# ------------------------------------------------------------
-# CONFIGURATION
-# ------------------------------------------------------------
-FPS = 10                       # frame extraction rate used by frame_extraction.py
-ACTIVITIES = {                 # SOP-FALL-LONG-2026-V2.2, Section 8
+# Configuration for the fall-detection label pipeline.
+FPS = 10
+ACTIVITIES = {
     1: ("forward_fall_hands", "FALL"),
     2: ("forward_fall_knees", "FALL"),
     3: ("falling_backward", "FALL"),
@@ -74,36 +26,31 @@ ACTIVITIES = {                 # SOP-FALL-LONG-2026-V2.2, Section 8
     10: ("lying_down", "NON_FALL"),
 }
 TRIALS_PER_ACTIVITY = 3
-# Pose annotation file read for the suggestions, first one found wins.
-# Suggestions only need rough hip/shoulder positions, so the automatic
-# output is fine; a CVAT export of your corrected annotations is better.
 ANNOTATION_FILES = ["annotations.xml", "annotations_v2.xml"]
 LABELS_FILENAME = "fall_labels.csv"
 REVIEW_DIRNAME = "fall_review"
 FRAME_LABELS_DIRNAME = "frame_labels"
 
-# Suggestion tuning
-EDGE_FRACTION = 0.15           # first 15% of frames = the starting ("before") posture
-TILT_MIN_TORSO_FRACTION = 0.5  # torso shorter than this x standing length on screen -> tilt ignored
-GLITCH_FILTER_FRAMES = 7       # running median: removes pose glitches up to 3 frames long
-FAST_SPEED = 0.025             # "fast" = covering the whole drop within ~4 s (progress per frame)
-FAST_GAP_FRAMES = 2            # pauses up to this long inside the descent are bridged
-MIN_PEAK_SPEED = 0.03          # peak speed (progress per frame) below this = no clear fall
-GLITCH_JUMP = 0.40             # raw vs filtered progress differing by this = a pose glitch
+# Suggestion tuning.
+EDGE_FRACTION = 0.15
+TILT_MIN_TORSO_FRACTION = 0.5
+GLITCH_FILTER_FRAMES = 7
+FAST_SPEED = 0.025
+FAST_GAP_FRAMES = 2
+MIN_PEAK_SPEED = 0.03
+GLITCH_JUMP = 0.40
 MAX_GLITCH_FRAMES = 3
-MIN_FALL_FRAMES = 2            # plausibility checks (flag rows as "check", never change them)
-MAX_FALL_FRAMES = 20           # 2 s at 10 fps (controlled falls in the suit can take ~1.6 s)
-MIN_SEGMENT_GAIN = 0.20        # a descent must cover >= 20% of the way down to count as the fall
-ALREADY_DOWN_PROGRESS = 0.80   # descents starting after the body was already this far down are ignored
-CAMERA_OFFSET_TOLERANCE = 30   # cameras placing the fall more than 3 s apart -> check
-MAX_SETTLE_FRAMES = 30         # end more than 3 s after impact
-CAMERA_DURATION_TOLERANCE = 5  # A and B fall durations (frames) may differ by this much
-# (A and B videos of one trial may legitimately differ in length - e.g. one
-#  camera recording 20 s and the other 10 s - so lengths are not compared.)
-STILL_MOTION_RATIO = 0.02      # "still" = median joint movement < 2% of body size per frame
-STILL_FRAMES = 5               # ... for this many consecutive frames (0.5 s at 10 fps)
-MIN_HIP_CHANGE_RATIO = 0.15    # hip must move at least this x body size to be usable
-MIN_TILT_CHANGE_DEG = 30.0     # torso must tilt at least this much to be usable
+MIN_FALL_FRAMES = 2
+MAX_FALL_FRAMES = 20
+MIN_SEGMENT_GAIN = 0.20
+ALREADY_DOWN_PROGRESS = 0.80
+CAMERA_OFFSET_TOLERANCE = 30
+MAX_SETTLE_FRAMES = 30
+CAMERA_DURATION_TOLERANCE = 5
+STILL_MOTION_RATIO = 0.02
+STILL_FRAMES = 5
+MIN_HIP_CHANGE_RATIO = 0.15
+MIN_TILT_CHANGE_DEG = 30.0
 
 COLUMNS = [
     "subject_id", "trial_uid", "camera", "activity_id", "activity_name", "trial_id",
@@ -115,9 +62,7 @@ HUMAN_COLUMNS = ["fall_start_frame", "impact_frame", "fall_end_frame", "confirme
 TRIAL_PATTERN = re.compile(r"^Activity(\d+)Trial(\d+)$")
 
 
-# ------------------------------------------------------------
 # Layout helpers
-# ------------------------------------------------------------
 def camera_label(folder_name: str) -> str:
     """cctv-a / Cam_A / cama -> CCTV-A (same for B)."""
     n = folder_name.lower().replace("_", "").replace("-", "")

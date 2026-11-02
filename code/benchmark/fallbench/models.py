@@ -1,14 +1,4 @@
-"""RF, SVM and LSTM behind one interface.
-
-    model = make_model(name, params, cfg, seed)
-    model.fit(X, y, groups)        # groups = trial ids (LSTM early stopping)
-    model.score(X)                 # continuous FALL score for ranking / thresholding
-    model.describe()               # structure for the cost table
-    model.save(path) / load(path)
-
-All learned preprocessing (imputation, scaling) lives inside the model and
-is fitted on the training data passed to fit().
-"""
+"""Model classes for RF, SVM, and LSTM."""
 from __future__ import annotations
 
 import copy
@@ -28,7 +18,7 @@ NAMES = {"rf": "RF", "svm": "SVM", "lstm": "LSTM"}
 
 
 class Model:
-    input = "sum"                                  # "sum" (window summaries) or "seq" (ordered frames)
+    input = "sum"
 
     def __init__(self, params: dict, cfg: dict, seed: int):
         self.params, self.cfg, self.seed = dict(params), cfg, seed
@@ -68,7 +58,6 @@ class RF(SklearnModel):
                     n_trees=len(nodes), total_nodes=sum(nodes), max_depth=depth)
 
     def ops(self, X):
-        """Measured: mean number of tree nodes visited per window."""
         visits = self.pipe[-1].decision_path(self.pipe[0].transform(X))[0].sum(axis=1).mean()
         return float(visits), "tree-node visits (measured)"
 
@@ -80,7 +69,6 @@ class SVM(SklearnModel):
                                  **self.params))
 
     def score(self, X):
-        # decision value: enough for ROC/PR, and the threshold is set on training-subject scores
         return self.pipe.decision_function(X)
 
     def describe(self):
@@ -93,9 +81,8 @@ class SVM(SklearnModel):
         return float(svc.n_support_.sum() * svc.shape_fit_[1]), "kernel multiply-adds (theoretical)"
 
 
-# ---------------------------------------------------------------- LSTM
-import torch                                    # noqa: E402
-from torch import nn                            # noqa: E402
+import torch
+from torch import nn
 
 
 class LSTMNet(nn.Module):
@@ -104,7 +91,7 @@ class LSTMNet(nn.Module):
         self.lstm = nn.LSTM(n_in, hidden, layers, batch_first=True, dropout=dropout if layers > 1 else 0.0)
         self.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(hidden, 1))
 
-    def forward(self, x):                        # B x T x F, fixed T (no padding needed)
+    def forward(self, x):
         return self.head(self.lstm(x)[0][:, -1]).squeeze(-1)
 
 
@@ -124,7 +111,6 @@ class LSTM(Model):
         set_seed(self.seed)
         m, p = self.cfg["models"]["lstm"], self.params
         self.device = device(m["device"])
-        # early stopping on held-out training trials (never the test subject)
         k = round(1 / m["val_fraction"])
         tr, va = next(StratifiedGroupKFold(k, shuffle=True, random_state=self.seed).split(X, y, groups))
         flat = X[tr].reshape(-1, X.shape[-1])

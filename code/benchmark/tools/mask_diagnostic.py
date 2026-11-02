@@ -1,29 +1,6 @@
 #!/usr/bin/env python3
-"""Diagnose the ORIGINAL static masks before the corrected run (read-only).
+"""Diagnose the original static masks before the corrected run."""
 
-For every camera it
-  1. reproduces the original mask of each participant (4 evenly spaced frames per
-     usable recording, suit-green in >= 50% of them, 11x11 dilation) and checks it
-     against the saved mask in <features_dir>/static/ of the original run;
-  2. compares the S01 and S02 masks: share of static pixels, intersection over
-     union (IoU), number and share of differing pixels (XOR), with overlay images;
-  3. checks camera correspondence between the participants: frame size before and
-     after resizing, and the shift between their median background images
-     (phase correlation), with side-by-side images;
-  4. extracts silhouettes from every usable recording twice, with the
-     participant's own mask (original pipeline) and with the other participant's
-     mask (what the corrected pipeline applies to that participant when it is the
-     test subject), and compares presence, area, bounding box and centroid.
-
-Nothing in the dataset or in the original run is modified. Outputs go to --out,
-and the camera check is also written to the corrected run's features folder,
-where `run.py extract --config config_foldmask.yaml` requires it.
-
-Usage (from the fall_bench folder):
-    python tools/mask_diagnostic.py
-    python tools/mask_diagnostic.py --config config.yaml --corrected config_foldmask.yaml \
-        --out runs/foldmask/diagnostics
-"""
 from __future__ import annotations
 
 import argparse
@@ -45,11 +22,9 @@ from fallbench.data import build_index, list_frames  # noqa: E402
 from fallbench.masking import camera_check_path  # noqa: E402
 from fallbench.silhouette import Tracker, read, static_green  # noqa: E402
 
-# Descriptive thresholds for counting "materially different" silhouette frames.
-# They are reported alongside the full distributions; they are not used to
-# declare the masks equivalent.
-CENTROID_PX = 5.0     # centroid moved by more than 5 px (frame width 640)
-REL_CHANGE = 0.10     # area, bounding-box width or height changed by more than 10%
+# Thresholds for reporting frames that differ materially; they are descriptive only.
+CENTROID_PX = 5.0
+REL_CHANGE = 0.10
 
 
 def sampled(frames: list[Path], s: dict) -> list[np.ndarray]:
@@ -74,9 +49,9 @@ def phase_shift(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float]:
 def overlay(bg: np.ndarray, m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
     img = (0.6 * bg).astype(np.uint8)
     only1, only2, both = m1 & ~m2, m2 & ~m1, m1 & m2
-    img[both] = (0, 220, 220)      # yellow: static in both
-    img[only1] = (0, 0, 255)       # red: S01 only
-    img[only2] = (255, 80, 0)      # blue: S02 only
+    img[both] = (0, 220, 220)
+    img[only1] = (0, 0, 255)
+    img[only2] = (255, 80, 0)
     return img
 
 
@@ -102,7 +77,7 @@ def _two_masks(job):
         f2, _ = t_other(img)
         rows.append(dict(frame=int(path.stem), W=W, H=H,
                          **{f"{k}_own": f1.get(k, np.nan) for k in ("present", "area", "width", "height", "cx", "cy")},
-                         **{f"{k}_other": f2.get(k, np.nan) for k in ("present", "area", "width", "height", "cx", "cy")}))
+                         **{f"{k}_other": f2.get(k, np.nan) for k in ("present", "area", "width", "height", "cx", "cy")} ))
     d = pd.DataFrame(rows)
     both = (d.present_own == 1) & (d.present_other == 1)
     b = d[both]
@@ -163,7 +138,7 @@ def main():
             agree = (None if saved_m is None else
                      float(((saved_m > 0) == m).mean()) if saved_m.shape == m.shape else "shape differs")
             if saved_m is not None and saved_m.shape == m.shape:
-                m_use = saved_m > 0           # analyse the masks that were actually used
+                m_use = saved_m > 0
             else:
                 m_use = m
             p = out / "masks" / f"original_{subj}_{cam}.png"
@@ -225,12 +200,10 @@ def main():
     cams.to_csv(out / "mask_comparison.csv", index=False)
 
     lines = ["# Static mask diagnostic (original pipeline)", "",
-             "Original masks: one per participant and camera, from all of that participant's usable recordings "
-             "(4 evenly spaced frames each, suit-green in >= 50%, 11x11 dilation).", "",
+             "Original masks: one per participant and camera, from all usable recordings. The script also checks camera correspondence and silhouette drift.", "",
              "## Masks per participant and camera", "", md_table(pd.DataFrame(mask_rows), "{:.3f}", index=False), "",
              "## S01 vs S02 masks and camera correspondence", "", md_table(cams, "{:.3f}", index=False), "",
-             f"Images: `camera_and_masks_<camera>.jpg` (median backgrounds and mask overlay), `masks/xor_<camera>.png`. "
-             f"Camera check written to `{dest}` (max allowed shift {max_shift:g} px).", ""]
+             f"Images: `camera_and_masks_<camera>.jpg` and `masks/xor_<camera>.png`. Camera check saved to `{dest}` (max allowed shift {max_shift:g} px).", ""]
 
     if not a.skip_silhouettes:
         jobs = []
@@ -238,7 +211,7 @@ def main():
             other = s2 if rec["subject_id"] == s1 else s1
             jobs.append((rec, masks[(rec["subject_id"], rec["camera"])], masks[(other, rec["camera"])], s))
         print(f"extracting silhouettes of {len(jobs)} recordings with both masks ...")
-        with ProcessPoolExecutor(a.workers, mp_context=mp.get_context("spawn")) as pool:   # fork + OpenCV can deadlock
+        with ProcessPoolExecutor(a.workers, mp_context=mp.get_context("spawn")) as pool:
             per = pd.DataFrame(list(pool.map(_two_masks, jobs)))
         per.to_csv(out / "silhouette_comparison_per_recording.csv", index=False)
         g = per.groupby(["subject_id", "camera"])
@@ -255,12 +228,8 @@ def main():
             "centroid_shift_px_max": g.centroid_shift_px_max.max()}).reset_index()
         summ.to_csv(out / "silhouette_comparison_summary.csv", index=False)
         lines += ["## Silhouettes with the own mask vs the other participant's mask", "",
-                  "`own` = original pipeline. `other` = the mask the corrected pipeline applies to this participant "
-                  "when it is the test subject (estimated from the other participant). In the corrected pipeline a "
-                  "participant's recordings used for training keep its own mask, so only test-subject features change.", "",
-                  f"Materially different frame (descriptive only): silhouette present with one mask but not the other, "
-                  f"or centroid moved > {CENTROID_PX:g} px, or area / box width / box height changed > "
-                  f"{100 * REL_CHANGE:g}%.", "",
+                  "`own` = original pipeline; `other` = the mask used when the participant is the test subject.", "",
+                  f"Materially different frame: presence differs or centroid / area / box change exceeds {CENTROID_PX:g} px / {100 * REL_CHANGE:g}%.", "",
                   md_table(summ, "{:.3f}", index=False), "",
                   "Per recording: `silhouette_comparison_per_recording.csv`.", ""]
     (out / "mask_diagnostic.md").write_text("\n".join(lines))
@@ -269,11 +238,9 @@ def main():
     bad = [c for c, v in cam_check.items() if not v["frame_size_match"]]
     moved = [c for c, v in cam_check.items() if v["max_abs_shift_px"] > max_shift]
     if bad:
-        print(f"\nSTOP: frame sizes differ for {bad}. Camera correspondence is not established; do not run the "
-              "corrected extraction until this is clarified.")
+        print(f"\nSTOP: frame sizes differ for {bad}. Camera correspondence is not established; do not run the corrected extraction until this is clarified.")
     elif moved:
-        print(f"\nCHECK: scene shift above {max_shift:g} px for {moved}. Look at camera_and_masks_<camera>.jpg; "
-              "only if it is the same installation, run extract with --accept-camera-shift.")
+        print(f"\nCHECK: scene shift above {max_shift:g} px for {moved}. Look at camera_and_masks_<camera>.jpg; only if it is the same installation, run extract with --accept-camera-shift.")
     else:
         print("\nCamera check passed: same frame size and no scene shift above the limit for every camera.")
 

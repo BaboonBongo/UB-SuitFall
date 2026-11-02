@@ -1,10 +1,4 @@
-"""Window-level and event-level metrics, recording-level bootstrap, paired tests.
-
-Windows of one recording are correlated, so uncertainty always comes from
-resampling whole RECORDINGS within each test subject, never single windows.
-Each leave-one-subject-out fold has its own model and threshold, so metrics
-are computed per fold and then averaged over folds.
-"""
+"""Window-level and event-level metrics with bootstrap uncertainty."""
 from __future__ import annotations
 
 import numpy as np
@@ -14,7 +8,7 @@ from sklearn.metrics import precision_recall_curve
 
 
 def choose_threshold(y, s, rule: str = "max_f1", recall_target: float = 0.9) -> float:
-    """Operating threshold from TRAINING-subject out-of-fold scores."""
+    """Pick the threshold for a model from its training-subject scores."""
     prec, rec, thr = precision_recall_curve(y, s)
     prec, rec = prec[:-1], rec[:-1]
     if rule == "recall_at":
@@ -24,19 +18,19 @@ def choose_threshold(y, s, rule: str = "max_f1", recall_target: float = 0.9) -> 
 
 
 def roc_auc(y, s) -> float:
-    """Mann-Whitney form (ties count 1/2); identical to sklearn's roc_auc_score."""
+    """AUC using the Mann-Whitney U formulation."""
     n1 = y.sum()
     n0 = len(y) - n1
     return float((rankdata(s)[y == 1].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)) if n1 and n0 else np.nan
 
 
 def pr_auc(y, s) -> float:
-    """Step-wise average precision; identical to sklearn's average_precision_score."""
+    """Average precision for binary labels."""
     n1 = y.sum()
     if not 0 < n1 < len(y):
         return np.nan
     order = np.argsort(-s, kind="mergesort")
-    last = np.r_[np.nonzero(np.diff(s[order]))[0], len(s) - 1]     # end of each distinct score
+    last = np.r_[np.nonzero(np.diff(s[order]))[0], len(s) - 1]
     tp = np.cumsum(y[order])[last]
     return float(np.sum(np.diff(np.r_[0.0, tp / n1]) * tp / (last + 1)))
 
@@ -46,7 +40,7 @@ def window_metrics(y, s, thr: float) -> dict:
     p = s >= thr
     tp, fp = int((p & (y == 1)).sum()), int((p & (y == 0)).sum())
     fn, tn = int(y.sum()) - tp, int((y == 0).sum()) - fp
-    div = lambda a, b: a / b if b else np.nan  # noqa: E731
+    div = lambda a, b: a / b if b else np.nan
     f1 = div(2 * tp, 2 * tp + fp + fn) if tp + fp + fn else 0.0
     f1_neg = div(2 * tn, 2 * tn + fp + fn) if tn + fp + fn else 0.0
     rec, spec = div(tp, tp + fn), div(tn, tn + fp)
@@ -57,10 +51,7 @@ def window_metrics(y, s, thr: float) -> dict:
 
 
 def event_metrics(windows: pd.DataFrame, index: pd.DataFrame, fps: float, gap: int) -> tuple[dict, pd.DataFrame]:
-    """Alarm episodes = runs of positive windows (gaps <= `gap` windows merged).
-    A fall is detected if an episode overlaps [fall_start, fall_end]; delay =
-    end of the first positive window overlapping the fall - fall_start.
-    Other episodes are false alarms (all episodes in non-fall recordings)."""
+    """Merge positive windows into alarm episodes and summarize event-level metrics."""
     info = index.set_index("recording_id")
     rows = []
     for rid, g in windows.groupby("recording_id"):
@@ -89,16 +80,14 @@ def event_metrics(windows: pd.DataFrame, index: pd.DataFrame, fps: float, gap: i
 
 
 def fold_mean(y, s, subjects, thresholds: dict, rows: dict | None = None) -> dict:
-    """Window metrics per test subject (own model + threshold), averaged over folds."""
+    """Aggregate per-subject metrics across folds."""
     per = [window_metrics(y[i], s[i], thresholds[subj]) for subj, i in
            (rows or {k: np.nonzero(subjects == k)[0] for k in thresholds}).items()]
     return {k: float(np.nanmean([d[k] for d in per])) for k in per[0]}
 
 
 def bootstrap(meta: pd.DataFrame, y, scores: dict, thresholds: dict, metrics: list, n: int, seed: int) -> dict:
-    """{model: n x len(metrics)}. In each draw the recordings of every test
-    subject are resampled (stratified by category); every model is scored on
-    the SAME draw, so model differences are paired."""
+    """Bootstrap whole recordings for paired comparison of models."""
     rng = np.random.default_rng(seed)
     meta = meta.reset_index(drop=True)
     strata = {subj: [list(g.groupby("recording_id").indices.values()) for _, g in gs.groupby("category")]
@@ -122,7 +111,7 @@ def percentile_ci(a, level: float = 0.95) -> tuple[float, float]:
 
 
 def paired_p(diff) -> float:
-    """Two-sided bootstrap p-value for a paired difference."""
+    """Two-sided bootstrap p-value for paired differences."""
     d = diff[~np.isnan(diff)]
     return float(max(2 * min((d <= 0).mean(), (d >= 0).mean()), 1 / len(d))) if len(d) else np.nan
 

@@ -1,36 +1,4 @@
 #!/usr/bin/env python3
-# ==============================================================
-# rename_trials.py
-# ==============================================================
-#
-# Renames S02-style trial names  "<N>_<T>"  (e.g. 2_3.mp4)
-# to the pipeline's naming convention "Activity<N>Trial<T>"
-# (e.g. Activity2Trial3.mp4), so frame_extraction.py and
-# generate_cvat_pose.py pick them up.
-#
-# Activity number mapping (SOP-FALL-LONG-2026-V2.2 order):
-#   1..9 -> Activity1..Activity9
-#   11   -> Activity10   (recorded as "11" in the field)
-# Edit ACTIVITY_NUMBER_REMAP below if another session numbers differently.
-#
-# Works on both:
-#   - video files:   Cam_A/2_3.mp4        -> Cam_A/Activity2Trial3.mp4
-#   - frame folders: Frames/Cam_A/2_3/    -> Frames/Cam_A/Activity2Trial3/
-#
-# SAFE BY DEFAULT: without --apply it only prints what it would do.
-# With --apply it renames and writes rename_log.csv into each folder;
-# --undo reads that log and renames everything back.
-#
-# Usage:
-#   python rename_trials.py <folder> [<folder> ...]            # dry run
-#   python rename_trials.py <folder> [<folder> ...] --apply    # rename
-#   python rename_trials.py <folder> [<folder> ...] --undo     # revert
-#
-# Example (S02):
-#   python rename_trials.py /path/to/S02/Cam_A \
-#                           /path/to/S02/Cam_B
-# ==============================================================
-
 import csv
 import re
 import sys
@@ -38,14 +6,12 @@ from pathlib import Path
 from typing import List, Tuple
 
 ACTIVITY_NUMBER_REMAP = {11: 10}
-
 SOURCE_NAME_PATTERN = re.compile(r"^(\d+)_(\d+)$")
 LOG_FILENAME = "rename_log.csv"
 
 
 def planned_renames(folder: Path) -> Tuple[List[Tuple[Path, Path]], List[str]]:
-    """Return ([(old_path, new_path), ...], [skipped-entry messages]) for
-    every file or subfolder directly inside `folder` named <N>_<T>[.ext]."""
+    """Return planned renames for entries named <N>_<T> inside a folder."""
     renames: List[Tuple[Path, Path]] = []
     skipped: List[str] = []
 

@@ -1,8 +1,4 @@
-"""Test-set metrics, confidence intervals, paired comparisons and robustness.
-
-Reads predictions.csv (never refits a model, except loading saved ones for
-the missing-silhouette robustness test).
-"""
+"""Evaluate model predictions on the held-out test set."""
 from __future__ import annotations
 
 import itertools
@@ -25,7 +21,7 @@ EVENT = ["event_recall", "median_delay_s", "false_alarms_per_hour", "false_alarm
 
 
 def _aligned(preds: pd.DataFrame, seed: int):
-    """Scores of every model for one seed, aligned on the same window order."""
+    """Align every model’s window scores for one seed on the same ordering."""
     p = preds[preds.seed == seed].sort_values(["model", "fold", "recording_id", "start_frame"])
     ref = p[p.model == MODELS[0]].reset_index(drop=True)
     scores = {m: p[p.model == m]["score"].to_numpy() for m in MODELS}
@@ -37,9 +33,8 @@ def run(cfg: dict, robustness: bool = True) -> None:
     preds = pd.read_csv(out(cfg, "predictions.csv"))
     index = build_index(cfg)
     ev = cfg["evaluation"]
-    res = lambda name: out(cfg, "results", name)  # noqa: E731
+    res = lambda name: out(cfg, "results", name)
 
-    # ---- every fold x model x seed: window + event metrics
     rows, events = [], []
     for (fold, model, seed), g in preds.groupby(["fold", "model", "seed"]):
         em, per = event_metrics(g, index, cfg["fps"], ev["alarm_gap"])
@@ -50,13 +45,11 @@ def run(cfg: dict, robustness: bool = True) -> None:
     per_fold.to_csv(res("per_fold.csv"), index=False)
     pd.concat(events).to_csv(res("events.csv"), index=False)
 
-    # ---- mean over folds, then mean +- SD over seeds
     by_seed = per_fold.groupby(["model", "seed"])[WINDOW + EVENT].mean()
     summary = by_seed.groupby("model").agg(["mean", "std"])
     summary.columns = [f"{a}_{b}" for a, b in summary.columns]
     summary.to_csv(res("summary.csv"))
 
-    # ---- recording-level bootstrap: CIs (first seed) and paired tests (every seed)
     metrics, seeds = ev["metrics"], sorted(preds.seed.unique())
     ci_rows, tests = [], []
     for seed in seeds:
@@ -84,7 +77,6 @@ def run(cfg: dict, robustness: bool = True) -> None:
         mean_diff=("diff", "mean"), seeds=("seed", "count"), seeds_significant=("significant", "sum"),
         seeds_a_better=("diff", lambda d: int((d > 0).sum()))).to_csv(res("paired_tests_summary.csv"))
 
-    # ---- error analysis (first seed)
     p0 = preds[preds.seed == seeds[0]]
     pd.DataFrame([dict(model=m, activity_name=a, category=c, windows=len(g), fall_windows=g.label.sum(),
                        false_positive_rate=((g.pred == 1) & (g.label == 0)).sum() / max(1, (g.label == 0).sum()),
@@ -92,7 +84,7 @@ def run(cfg: dict, robustness: bool = True) -> None:
                   for (m, a, c), g in p0.groupby(["model", "activity_name", "category"])]) \
         .to_csv(res("per_activity.csv"), index=False)
     pd.DataFrame([dict(model=m, fold=f, camera=c, **window_metrics(g.label, g.score, g.threshold.iloc[0]))
-                  for (m, f, c), g in p0.groupby(["model", "fold", "camera"])]).to_csv(res("per_camera.csv"), index=False)
+                  for (m, f, c), g in p0.groupby(["model", "fold", "camera"])]) .to_csv(res("per_camera.csv"), index=False)
 
     if robustness:
         _robustness(cfg, index)
@@ -100,8 +92,7 @@ def run(cfg: dict, robustness: bool = True) -> None:
 
 
 def _robustness(cfg: dict, index: pd.DataFrame) -> None:
-    """(a) blank a share of test silhouettes, re-score with the trained models;
-    (b) within-subject CV PR-AUC vs cross-subject test PR-AUC."""
+    """Check robustness to missing silhouettes and distribution shift."""
     selected = json.loads(out(cfg, "selected.json").read_text())
     log = pd.read_csv(out(cfg, "training_log.csv"))
     log = log[log.seed == log.seed.min()]
