@@ -1,0 +1,12 @@
+# CORRECTED run (training-participant-only static masks).
+# Every setting is taken from config.yaml (subjects, silhouette, windows, models,
+# tuning, seeds, evaluation, benchmark, ablations); only the lines below differ.
+# The original results in runs/main and runs/features are not touched.
+inherit: config.yaml
+
+output_dir: runs/foldmask/main          # corrected results
+features_dir: runs/foldmask/features    # one sub-folder per fold: mask_from_<training subject>/
+mask_source: training                   # per fold, the static mask is estimated from the training
+                                        # subject's recordings only (fallbench/masking.py)
+max_camera_shift_px: 3                  # camera check (tools/mask_diagnostic.py): a larger scene shift
+                                        # between subjects stops extraction until confirmed

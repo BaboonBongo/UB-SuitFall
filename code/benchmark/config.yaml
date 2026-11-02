@@ -1,0 +1,83 @@
+# Fall-detection benchmark (RF vs SVM vs LSTM) - every setting lives here.
+
+output_dir: runs/main          # results of this run
+features_dir: runs/features    # per-frame silhouette features, shared by all runs
+seed: 42
+
+subjects:
+  S01: ../../S01
+  S02: ../../S02
+
+fps: 10                        # frame extraction rate
+
+silhouette:                    # suit-colour silhouette, no pose model
+  width: 640                   # frames resized to this width
+  suit_hsv: [[[40, 70, 60], [82, 255, 255]]]   # suit green, OpenCV HSV
+  static_samples_per_video: 4  # frames per video used to find static green scenery
+  static_min_fraction: 0.5     # green in >= 50% of sampled frames = scenery
+  merge_px: 21                 # joins suit patches split by the red parts
+  min_area: 0.0004             # smallest subject region (fraction of frame)
+
+windows:
+  length: 20                   # frames (2.0 s)
+  stride: 5                    # frames (0.5 s)
+  min_fall_fraction: 0.5       # window = FALL if >= 50% of its frames are FALL
+  features: shape_motion       # shape_motion | shape
+
+class_weighting: balanced      # balanced | none  (same choice for all three models)
+
+tuning:
+  inner_folds: 3               # StratifiedGroupKFold inside the training subject, groups = trial
+  threshold: max_f1            # max_f1 | recall_at
+  recall_target: 0.9           # used by recall_at
+  seeds: [0, 1, 2, 3, 4]       # repeated final training runs
+
+models:
+  rf:
+    n_iter: 30                 # random search; null = full grid
+    space:
+      n_estimators: [100, 300, 500]
+      max_depth: [null, 8, 16, 32]
+      min_samples_split: [2, 5, 10]
+      min_samples_leaf: [1, 2, 4, 8]
+  svm:
+    n_iter: null               # full grid over both kernels
+    space:
+      - {kernel: [linear], C: [0.001, 0.01, 0.1, 1, 10, 100]}
+      - {kernel: [rbf], C: [0.1, 1, 10, 100], gamma: [scale, 0.001, 0.01, 0.1]}
+  lstm:
+    n_iter: 12
+    space:
+      hidden: [16, 32, 64]
+      layers: [1, 2]
+      dropout: [0.0, 0.2, 0.4]
+      lr: [0.001, 0.003]
+      batch: [32, 64, 128]
+    max_epochs: 80
+    patience: 10
+    val_fraction: 0.2          # training trials held out for early stopping
+    device: auto               # auto | cpu | cuda
+
+evaluation:
+  alarm_gap: 2                 # positive windows <= 2 windows apart = one alarm
+  bootstrap: 2000              # recording-level resamples
+  metrics: [f1, balanced_accuracy, pr_auc, roc_auc, recall, fpr]   # CIs and paired tests
+
+benchmark:
+  threads: 1
+  warmup: 20
+  repeats: 300
+  batch: 256
+  sample_frames: 200           # frames timed for preprocessing cost
+
+ablations:                     # each entry overrides the settings above
+  search_scale: 0.4            # share of each search used in ablation runs
+  seeds: [0, 1, 2]
+  runs:
+    reference: {}
+    window_1s: {windows: {length: 10}}
+    window_3s: {windows: {length: 30}}
+    no_overlap: {windows: {stride: 20}}
+    shape_only: {windows: {features: shape}}
+    no_class_weighting: {class_weighting: none}
+  missing_rates: [0.1, 0.2, 0.3]   # test frames with the silhouette removed (no retraining)

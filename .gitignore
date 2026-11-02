@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+code/benchmark/runs/
+# videos and frames are published separately (too large for git)
+S0*/CCTV-A/
+S0*/CCTV-B/
+S0*/Frames/
